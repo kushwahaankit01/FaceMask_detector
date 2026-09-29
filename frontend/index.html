@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AegisVision AI — Real-Time Safety & Mask Compliance Control Center</title>
+  <meta name="description"
+    content="Real-Time Face Mask & Hand-Occlusion Detection Powered by MobileNetV2, MediaPipe Hands & TFLite Quantization.">
+
+  <!-- Google Fonts & FontAwesome -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <!-- CSS Stylesheet -->
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+
+  <!-- ============================================================
+       HEADER & NAVIGATION BAR
+       ============================================================ -->
+  <header>
+    <div class="header-container">
+      <div class="logo-group">
+        <div class="logo-icon">
+          <i class="fa-solid fa-shield-virus"></i>
+        </div>
+        <div class="brand-info">
+          <h1>AegisVision AI</h1>
+          <p>Real-Time Face Mask & Hand-Occlusion Compliance Engine</p>
+        </div>
+        <!-- <div class="badge-winner">
+          <i class="fa-solid fa-trophy"></i> 3rd Place Winner - DSAI Hackathon
+        </div> -->
+      </div>
+
+      <div class="header-meta">
+        <div class="status-pill" id="server-status">
+          <div class="pulse-dot"></div> API Engine Online
+        </div>
+        <button class="btn-secondary" id="btn-open-modal">
+          <i class="fa-solid fa-circle-info"></i> Architecture Info
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================================
+       MAIN CONTENT CONTAINER
+       ============================================================ -->
+  <main>
+
+    <!-- STATS TELEMETRY GRID -->
+    <div class="stats-grid">
+      <div class="glass-panel stat-card compliance">
+        <div class="stat-icon">
+          <i class="fa-solid fa-chart-line"></i>
+        </div>
+        <div class="stat-content">
+          <h3>Safety Compliance</h3>
+          <div class="stat-number" id="stat-compliance">100%</div>
+          <div class="stat-subtext">Overall workplace compliance</div>
+        </div>
+      </div>
+
+      <div class="glass-panel stat-card scanned">
+        <div class="stat-icon">
+          <i class="fa-solid fa-users-viewfinder"></i>
+        </div>
+        <div class="stat-content">
+          <h3>Total Scanned</h3>
+          <div class="stat-number" id="stat-scanned">0</div>
+          <div class="stat-subtext">Faces analyzed</div>
+        </div>
+      </div>
+
+      <div class="glass-panel stat-card violations">
+        <div class="stat-icon">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <div class="stat-content">
+          <h3>No-Mask Violations</h3>
+          <div class="stat-number" id="stat-violations">0</div>
+          <div class="stat-subtext">Unmasked faces detected</div>
+        </div>
+      </div>
+
+      <div class="glass-panel stat-card occlusion">
+        <div class="stat-icon">
+          <i class="fa-solid fa-hand"></i>
+        </div>
+        <div class="stat-content">
+          <h3>Hand Occlusions</h3>
+          <div class="stat-number" id="stat-occlusions">0</div>
+          <div class="stat-subtext">MediaPipe hand touches</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TABS CONTROLLER -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" data-tab="tab-webcam">
+        <i class="fa-solid fa-camera"></i> Live Webcam Feed
+      </button>
+      <button class="tab-btn" data-tab="tab-image">
+        <i class="fa-solid fa-image"></i> Image Analyzer
+      </button>
+      <button class="tab-btn" data-tab="tab-telemetry">
+        <i class="fa-solid fa-microchip"></i> Model Telemetry & TFLite
+      </button>
+      <button class="tab-btn" data-tab="tab-logs">
+        <i class="fa-solid fa-list-check"></i> Audit Logs
+      </button>
+    </div>
+
+    <!-- ============================================================
+         TAB 1: LIVE WEBCAM WORKSPACE
+         ============================================================ -->
+    <div class="tab-content active" id="tab-webcam">
+
+      <!-- Left: Webcam Canvas Stream -->
+      <div class="glass-panel viewport-container">
+        <div class="canvas-wrapper">
+          <video id="webcam-video" autoplay playsinline muted></video>
+          <canvas id="webcam-canvas"></canvas>
+
+          <div class="overlay-status-bar">
+            <div class="rec-badge">
+              <i class="fa-solid fa-circle"></i> LIVE STREAM
+            </div>
+            <div class="fps-badge" id="fps-display">0 FPS</div>
+          </div>
+        </div>
+
+        <div class="controls-bar">
+          <div class="btn-group">
+            <button class="btn-primary" id="btn-start-webcam">
+              <i class="fa-solid fa-play"></i> Start Camera Stream
+            </button>
+            <button class="btn-danger" id="btn-stop-webcam" style="display: none;">
+              <i class="fa-solid fa-stop"></i> Stop Stream
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Live Controls & Settings -->
+      <div class="glass-panel panel-sidebar">
+        <div class="panel-header">
+          <h3>Detection Settings</h3>
+          <p>Configure model backend & threshold parameters</p>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span>Model Engine</span>
+            <i class="fa-solid fa-brain" style="color: var(--primary-cyan)"></i>
+          </div>
+          <select class="select-model" id="model-select">
+            <option value="h5">MobileNetV2 Keras (.h5) — High Accuracy</option>
+            <option value="tflite">Quantized TFLite (.tflite) — Edge Optimized</option>
+          </select>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span>Confidence Threshold</span>
+            <span id="conf-value" style="color: var(--primary-cyan); font-weight: 600;">35%</span>
+          </div>
+          <input type="range" id="conf-slider" min="0.1" max="0.9" step="0.05" value="0.35"
+            style="width: 100%; accent-color: var(--primary-cyan);">
+        </div>
+
+        <div class="setting-item" style="flex-direction: row; justify-content: space-between; align-items: center;">
+          <div class="setting-label" style="margin: 0;">
+            <span>Safety Audio Alarm</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-audio" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="panel-header" style="margin-top: 0.5rem;">
+          <h3>Real-Time Terminal Stream</h3>
+        </div>
+        <div class="live-feed-logs" id="live-logs">
+          <div class="log-entry info"><span>[System] Awaiting camera activation...</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         TAB 2: IMAGE ANALYZER
+         ============================================================ -->
+    <div class="tab-content" id="tab-image">
+      <div class="glass-panel" style="padding: 1.5rem;">
+        <div class="upload-zone" id="drop-zone">
+          <div class="upload-icon">
+            <i class="fa-solid fa-cloud-arrow-up"></i>
+          </div>
+          <h3 style="font-family: var(--font-heading); font-size: 1.2rem; margin-bottom: 0.4rem;">
+            Drag & Drop image here or click to browse
+          </h3>
+          <p style="font-size: 0.85rem; color: var(--text-muted);">
+            Supports PNG, JPG, JPEG for instant mask & hand occlusion verification
+          </p>
+          <input type="file" id="image-file-input" accept="image/*" style="display: none;">
+        </div>
+
+        <div class="analysis-results-grid" id="image-results-grid" style="display: none;">
+          <div class="image-preview-container">
+            <img id="img-annotated-preview" src="" alt="Annotated Prediction Output">
+          </div>
+          <div class="glass-panel" id="img-analysis-meta" style="padding: 1.25rem;">
+            <!-- Rendered dynamically by JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         TAB 3: MODEL TELEMETRY & EDGE BENCHMARKS
+         ============================================================ -->
+    <div class="tab-content" id="tab-telemetry">
+      <div class="glass-panel benchmark-card">
+        <div class="model-header-badge">
+          <h3 style="font-family: var(--font-heading); font-size: 1.1rem; color: var(--primary-blue);">
+            <i class="fa-solid fa-cube"></i> MobileNetV2 Keras Model (.h5)
+          </h3>
+          <span
+            style="background: rgba(79, 172, 254, 0.15); color: var(--primary-blue); padding: 0.25rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">Full
+            Precision</span>
+        </div>
+
+        <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5;">
+          Trained using Transfer Learning on MobileNetV2 with ImageNet weights. Optimized for high-accuracy feature
+          extraction and face mask binary classification.
+        </p>
+
+        <div
+          style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; font-size: 0.85rem;">
+          <div>• <strong>File Size:</strong> 11.5 MB</div>
+          <div>• <strong>Input Resolution:</strong> 224 x 224 x 3 (RGB)</div>
+          <div>• <strong>Precision:</strong> FP32 (32-bit Floating Point)</div>
+          <div>• <strong>Target Device:</strong> Cloud Servers / GPU Instances</div>
+        </div>
+      </div>
+
+      <div class="glass-panel benchmark-card">
+        <div class="model-header-badge">
+          <h3 style="font-family: var(--font-heading); font-size: 1.1rem; color: var(--primary-cyan);">
+            <i class="fa-solid fa-bolt"></i> Quantized TFLite Model (.tflite)
+          </h3>
+          <span
+            style="background: rgba(0, 242, 254, 0.15); color: var(--primary-cyan); padding: 0.25rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">76.8%
+            Size Reduction</span>
+        </div>
+
+        <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5;">
+          Quantized to INT8/FP16 for deployment on edge microcontrollers, Raspberry Pi, Android, and web applications.
+        </p>
+
+        <div class="size-comparison-bar">
+          <div class="bar-h5" style="width: 100%;" title="H5 Model Size (11.5 MB)"></div>
+          <div class="bar-tflite" style="width: 23.2%; margin-top: -24px; position: relative;"
+            title="TFLite Model Size (2.6 MB)"></div>
+        </div>
+
+        <div
+          style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; font-size: 0.85rem;">
+          <div>• <strong>File Size:</strong> 2.6 MB (Reduced from 11.5 MB)</div>
+          <div>• <strong>Inference Latency:</strong> ~12 - 18 ms</div>
+          <div>• <strong>Target Device:</strong> Edge Devices / Mobile / Web Assembly</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         TAB 4: AUDIT LOGS
+         ============================================================ -->
+    <div class="tab-content" id="tab-logs">
+      <div class="glass-panel" style="padding: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h3 style="font-family: var(--font-heading); font-size: 1.1rem;">Safety Compliance Log Stream</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">Timestamped compliance audit reporting</p>
+          </div>
+          <button class="btn-primary" id="btn-export-csv">
+            <i class="fa-solid fa-file-csv"></i> Export CSV Report
+          </button>
+        </div>
+
+        <table class="logs-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Time</th>
+              <th>Status</th>
+              <th>Confidence</th>
+              <th>Hand Occlusion</th>
+              <th>Model Used</th>
+              <th>Latency</th>
+            </tr>
+          </thead>
+          <tbody id="logs-table-body">
+            <tr>
+              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                No audit entries recorded yet. Start camera or upload images to populate.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ============================================================
+       HACKATHON WINNER INFO MODAL
+       ============================================================ -->
+  <div class="modal-backdrop" id="info-modal">
+    <div class="glass-panel modal-box">
+      <button class="modal-close" id="btn-close-modal">&times;</button>
+
+      <div style="display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1rem;">
+        <i class="fa-solid fa-trophy" style="color: var(--accent-amber); font-size: 2rem;"></i>
+        <div>
+          <!-- <h2 style="font-family: var(--font-heading); font-size: 1.3rem;">3rd Place Winner — DSAI Hackathon</h2> -->
+          <p style="font-size: 0.8rem; color: var(--text-muted);">AegisVision Real-Time Safety System</p>
+        </div>
+      </div>
+
+      <div
+        style="display: flex; flex-direction: column; gap: 0.8rem; font-size: 0.85rem; line-height: 1.5; color: var(--text-main);">
+        <!-- <p>
+          <strong>Why this project won 3rd place:</strong>
+        </p> -->
+        <ul style="padding-left: 1.2rem; color: var(--text-muted);">
+          <li style="margin-bottom: 0.4rem;">
+            <strong>Hand Occlusion Awareness:</strong> Integrates MediaPipe Hand landmark tracking to detect when
+            someone is touching or pulling down their mask.
+          </li>
+          <li style="margin-bottom: 0.4rem;">
+            <strong>Quantization & Edge Ready:</strong> Optimized the 11.5 MB MobileNetV2 architecture down to a 2.6 MB
+            TFLite binary without accuracy degradation.
+          </li>
+          <li style="margin-bottom: 0.4rem;">
+            <strong>Temporal Deque Smoothing:</strong> Uses a 5-frame moving window buffer to eliminate bounding-box
+            flicker during fast movement.
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- JS Application Logic -->
+  <script src="/static/js/app.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,6 @@
+tensorflow==2.16.2
+opencv-python-headless
+mediapipe==0.10.21
+pillow
+numpy<2.0.0
+gradio
