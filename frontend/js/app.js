@@ -6,6 +6,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // ------------------------------------------------------------
   // STATE MANAGEMENT
   // ------------------------------------------------------------
+  // ----------------------------------------------------------------
+  // BACKEND CONFIGURATION — update this URL if you change the backend
+  // ----------------------------------------------------------------
+  const BACKEND_URL = "https://helping51ankit-face-mask-detector.hf.space";
+
   const state = {
     webcamRunning: false,
     selectedModel: "h5",
@@ -22,6 +27,57 @@ document.addEventListener("DOMContentLoaded", () => {
     lastFrameTime: performance.now(),
     latestFrameDetections: null
   };
+
+  // ----------------------------------------------------------------
+  // GRADIO API HELPERS
+  // ----------------------------------------------------------------
+
+  /** Upload a Blob to Gradio's temp file store. Returns the server-side path. */
+  async function uploadToGradio(blob, filename = "image.jpg") {
+    const form = new FormData();
+    form.append("files", blob, filename);
+    const res = await fetch(`${BACKEND_URL}/upload`, { method: "POST", body: form });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    const paths = await res.json();
+    return paths[0]; // server-side temp path
+  }
+
+  /** Run Gradio /predict with a previously-uploaded file path. */
+  async function runGradioPredict(filePath) {
+    const res = await fetch(`${BACKEND_URL}/run/predict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: [{ path: filePath, meta: { "_type": "gradio.FileData" } }]
+      })
+    });
+    if (!res.ok) throw new Error(`Prediction failed: ${res.status}`);
+    const result = await res.json();
+    // result.data = [annotatedImageFileData, reportText]
+    const annotatedImg = result.data[0];
+    const reportText  = result.data[1] || "";
+    const imageUrl = annotatedImg && annotatedImg.url
+      ? annotatedImg.url
+      : (typeof annotatedImg === "string" ? annotatedImg : null);
+    return { imageUrl, reportText };
+  }
+
+  /** Parse the plain-text compliance report into a summary object. */
+  function parseComplianceReport(text) {
+    const num = (label) => {
+      const m = text.match(new RegExp(label + "[:\\s]+([\\d.]+)"));
+      return m ? parseFloat(m[1]) : 0;
+    };
+    return {
+      total_faces:     num("Faces Scanned"),
+      masked:          num("Masked Count"),
+      no_mask:         num("No Mask Violations"),
+      hand_occluded:   num("Hand Occlusions"),
+      compliance_rate: num("Compliance Score"),
+      latency_ms:      num("Inference Speed"),
+      model_used:      "h5 (MobileNetV2)"
+    };
+  }
 
   // MediaPipe Hand Skeletal Connections (21 Landmarks)
   const HAND_CONNECTIONS = [
@@ -208,27 +264,26 @@ document.addEventListener("DOMContentLoaded", () => {
       drawDetectionsOnCanvas(state.latestFrameDetections);
     }
 
-    // 4. Capture snapshot from CLEAN offscreen canvas and send to API
+    // 4. Capture snapshot from CLEAN offscreen canvas and send to Gradio
     if (!isProcessingFrame) {
       isProcessingFrame = true;
       try {
         const blob = await new Promise(resolve => offscreenCanvas.toBlob(resolve, 'image/jpeg', 0.7));
         if (blob && state.webcamRunning) {
-          const formData = new FormData();
-          formData.append("file", blob, "frame.jpg");
-          formData.append("model", state.selectedModel);
-          formData.append("conf", state.confidenceThresh);
+          const filePath = await uploadToGradio(blob, "frame.jpg");
+          const { imageUrl, reportText } = await runGradioPredict(filePath);
+          const summary = parseComplianceReport(reportText);
 
-          const response = await fetch("/api/predict/frame", {
-            method: "POST",
-            body: formData
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            state.latestFrameDetections = data;
-            updateStatsAndLogs(data);
+          // Show annotated frame from Gradio in the overlay img
+          const annotatedOverlay = document.getElementById("webcam-annotated-overlay");
+          if (annotatedOverlay && imageUrl) {
+            annotatedOverlay.src = imageUrl;
+            annotatedOverlay.style.display = "block";
           }
+
+          const fakeData = { summary, faces: [], hand_boxes: [], hand_landmarks: [] };
+          state.latestFrameDetections = fakeData;
+          updateStatsAndLogs(fakeData);
         }
       } catch (e) {
         console.error("Frame inference error:", e);
@@ -414,53 +469,50 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   async function handleImageUpload(file) {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("model", state.selectedModel);
-
-    addLiveLog(`Uploading image: ${file.name}...`, "info");
+    addLiveLog(`Uploading image: ${file.name} → AegisVision AI backend...`, "info");
+    imgAnnotatedPreview.src = "";
+    imageResultsGrid.style.display = "none";
 
     try {
-      const response = await fetch("/api/predict/image", {
-        method: "POST",
-        body: formData
-      });
+      const filePath = await uploadToGradio(file, file.name);
+      const { imageUrl, reportText } = await runGradioPredict(filePath);
+      const s = parseComplianceReport(reportText);
 
-      if (response.ok) {
-        const data = await response.json();
-
-        imgAnnotatedPreview.src = data.annotated_image;
-        imageResultsGrid.style.display = "grid";
-
-        const s = data.summary;
-        imgAnalysisMeta.innerHTML = `
-          <div class="panel-header">
-            <h3>Image Analysis Report</h3>
-            <p>Model: <strong>${s.model_used}</strong> | Latency: <strong>${s.latency_ms} ms</strong></p>
-          </div>
-          <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem;">
-            <div class="setting-item">
-              <span>Faces Scanned:</span> <strong>${s.total_faces}</strong>
-            </div>
-            <div class="setting-item">
-              <span>Masked:</span> <strong style="color: var(--accent-emerald)">${s.masked}</strong>
-            </div>
-            <div class="setting-item">
-              <span>No Mask Violations:</span> <strong style="color: var(--accent-crimson)">${s.no_mask}</strong>
-            </div>
-            <div class="setting-item">
-              <span>Hand Occlusions:</span> <strong style="color: var(--accent-amber)">${s.hand_occluded}</strong>
-            </div>
-            <div class="setting-item">
-              <span>Compliance Score:</span> <strong>${s.compliance_rate}%</strong>
-            </div>
-          </div>
-        `;
-
-        updateStatsAndLogs(data);
+      if (imageUrl) {
+        imgAnnotatedPreview.src = imageUrl;
       }
+      imageResultsGrid.style.display = "grid";
+
+      imgAnalysisMeta.innerHTML = `
+        <div class="panel-header">
+          <h3>Image Analysis Report</h3>
+          <p>Model: <strong>${s.model_used}</strong> | Latency: <strong>${s.latency_ms} ms</strong></p>
+        </div>
+        <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem;">
+          <div class="setting-item">
+            <span>Faces Scanned:</span> <strong>${s.total_faces}</strong>
+          </div>
+          <div class="setting-item">
+            <span>Masked:</span> <strong style="color: var(--accent-emerald)">${s.masked}</strong>
+          </div>
+          <div class="setting-item">
+            <span>No Mask Violations:</span> <strong style="color: var(--accent-crimson)">${s.no_mask}</strong>
+          </div>
+          <div class="setting-item">
+            <span>Hand Occlusions:</span> <strong style="color: var(--accent-amber)">${s.hand_occluded}</strong>
+          </div>
+          <div class="setting-item">
+            <span>Compliance Score:</span> <strong>${s.compliance_rate}%</strong>
+          </div>
+        </div>
+      `;
+
+      const data = { summary: s, faces: [], hand_boxes: [], hand_landmarks: [] };
+      updateStatsAndLogs(data);
+      addLiveLog(`Analysis complete — ${s.total_faces} face(s), ${s.compliance_rate}% compliant`, "mask");
     } catch (e) {
       alert("Error analyzing image: " + e.message);
+      addLiveLog(`Error: ${e.message}`, "no-mask");
     }
   }
 
@@ -515,13 +567,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function fetchSystemStatus() {
     try {
-      const res = await fetch("/api/status");
+      const res = await fetch(
+        `https://huggingface.co/api/spaces/helping51Ankit/face-mask-detector`,
+        { headers: { "Accept": "application/json" } }
+      );
       if (res.ok) {
         const data = await res.json();
-        console.log("AegisVision Backend Telemetry Loaded:", data);
+        const stage = data.runtime?.stage || "UNKNOWN";
+        const hw = data.runtime?.hardware?.current || "cpu";
+        console.log(`AegisVision Backend: ${stage} on ${hw}`);
+        const statusEl = document.getElementById("backend-status-text");
+        if (statusEl) statusEl.textContent = `Backend: ${stage} (${hw.toUpperCase()})`;
       }
     } catch (e) {
-      console.warn("Backend API offline or starting up...", e);
+      console.warn("Backend status check failed:", e);
     }
   }
 });
