@@ -42,24 +42,74 @@ document.addEventListener("DOMContentLoaded", () => {
     return paths[0]; // server-side temp path
   }
 
-  /** Run Gradio /predict with a previously-uploaded file path. */
+  /**
+   * Run Gradio prediction using the Queue protocol (required for ZeroGPU).
+   * Flow: POST /queue/join → SSE /queue/data → wait for process_completed.
+   */
   async function runGradioPredict(filePath) {
-    const res = await fetch(`${BACKEND_URL}/run/predict`, {
+    const sessionHash = Math.random().toString(36).slice(2, 10);
+
+    // Step 1: Join the Gradio queue
+    const joinRes = await fetch(`${BACKEND_URL}/queue/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        data: [{ path: filePath, meta: { "_type": "gradio.FileData" } }]
+        data: [{ path: filePath, meta: { "_type": "gradio.FileData" } }],
+        fn_index: 0,
+        session_hash: sessionHash,
+        trigger_id: null
       })
     });
-    if (!res.ok) throw new Error(`Prediction failed: ${res.status}`);
-    const result = await res.json();
-    // result.data = [annotatedImageFileData, reportText]
-    const annotatedImg = result.data[0];
-    const reportText  = result.data[1] || "";
-    const imageUrl = annotatedImg && annotatedImg.url
-      ? annotatedImg.url
-      : (typeof annotatedImg === "string" ? annotatedImg : null);
-    return { imageUrl, reportText };
+    if (!joinRes.ok) throw new Error(`Queue join failed: ${joinRes.status}`);
+
+    // Step 2: Listen to SSE stream for the result
+    return new Promise((resolve, reject) => {
+      const evtSource = new EventSource(
+        `${BACKEND_URL}/queue/data?session_hash=${sessionHash}`
+      );
+
+      const timeout = setTimeout(() => {
+        evtSource.close();
+        reject(new Error("Prediction timed out (45s) — backend may be waking up, try again"));
+      }, 45000);
+
+      evtSource.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          if (msg.msg === "estimation") {
+            const queuePos = msg.queue_size || 0;
+            if (queuePos > 0) addLiveLog(`⏳ Queue position: ${queuePos}`, "info");
+          } else if (msg.msg === "process_starts") {
+            addLiveLog("⚡ GPU inference started...", "info");
+          } else if (msg.msg === "process_completed") {
+            clearTimeout(timeout);
+            evtSource.close();
+            const outputData = msg.output?.data || [];
+            const annotatedImg = outputData[0];
+            const reportText  = outputData[1] || "";
+            const imageUrl = annotatedImg?.url
+              ? annotatedImg.url
+              : (typeof annotatedImg === "string" ? annotatedImg : null);
+            resolve({ imageUrl, reportText });
+          } else if (msg.msg === "queue_full") {
+            clearTimeout(timeout);
+            evtSource.close();
+            reject(new Error("Gradio queue is full — try again in a moment"));
+          }
+        } catch (e) {
+          clearTimeout(timeout);
+          evtSource.close();
+          reject(new Error("SSE parse error: " + e.message));
+        }
+      };
+
+      evtSource.onerror = () => {
+        clearTimeout(timeout);
+        evtSource.close();
+        reject(new Error("SSE stream error — backend may be starting up"));
+      };
+    });
   }
 
   /** Parse the plain-text compliance report into a summary object. */
@@ -78,6 +128,7 @@ document.addEventListener("DOMContentLoaded", () => {
       model_used:      "h5 (MobileNetV2)"
     };
   }
+
 
   // MediaPipe Hand Skeletal Connections (21 Landmarks)
   const HAND_CONNECTIONS = [
@@ -287,6 +338,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       } catch (e) {
         console.error("Frame inference error:", e);
+        addLiveLog(`⚠ ${e.message}`, "no-mask");
       } finally {
         isProcessingFrame = false;
       }
