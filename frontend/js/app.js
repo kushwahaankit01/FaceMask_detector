@@ -270,8 +270,9 @@ document.addEventListener("DOMContentLoaded", () => {
       btnStartWebcam.style.display = "none";
       btnStopWebcam.style.display = "inline-flex";
 
-      addLiveLog("Camera stream initiated", "info");
-      requestAnimationFrame(processWebcamLoop);
+      addLiveLog("Camera stream initiated — inference every 3s", "info");
+      requestAnimationFrame(displayLoop);  // display at full FPS
+      inferenceLoop();                     // first inference immediately
     } catch (err) {
       alert("Could not access camera: " + err.message);
       console.error(err);
@@ -287,6 +288,8 @@ document.addEventListener("DOMContentLoaded", () => {
       videoElem.srcObject.getTracks().forEach(track => track.stop());
       videoElem.srcObject = null;
     }
+    clearTimeout(inferenceTimer);
+    inferenceTimer = null;
     ctx.clearRect(0, 0, canvasElem.width, canvasElem.height);
     btnStartWebcam.style.display = "inline-flex";
     btnStopWebcam.style.display = "none";
@@ -295,57 +298,74 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   let isProcessingFrame = false;
+  let inferenceTimer = null;
+  const INFERENCE_INTERVAL_MS = 3000; // Send one frame to backend every 3s
 
-  async function processWebcamLoop() {
+  // ── DISPLAY LOOP (runs at full ~30fps via rAF — just draws video) ──
+  function displayLoop() {
     if (!state.webcamRunning) return;
 
-    // 1. Measure FPS
+    // Measure FPS
     const now = performance.now();
     const delta = now - state.lastFrameTime;
     state.lastFrameTime = now;
-    const currentFps = Math.round(1000 / delta);
-    fpsDisplay.textContent = `${currentFps} FPS`;
+    fpsDisplay.textContent = `${Math.round(1000 / delta)} FPS`;
 
-    // 2. Draw CLEAN video frame to OFFSCREEN canvas (No Bounding Boxes!)
-    offscreenCtx.drawImage(videoElem, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
-
-    // 3. Draw video frame + persistent detection overlays to VISIBLE canvas
+    // Draw live video to visible canvas
     ctx.drawImage(videoElem, 0, 0, canvasElem.width, canvasElem.height);
-    if (state.latestFrameDetections) {
-      drawDetectionsOnCanvas(state.latestFrameDetections);
+
+    // Draw latest annotated overlay from Gradio (if available)
+    const annotatedOverlay = document.getElementById("webcam-annotated-overlay");
+    if (annotatedOverlay && annotatedOverlay.src && annotatedOverlay.complete) {
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(annotatedOverlay, 0, 0, canvasElem.width, canvasElem.height);
+      ctx.globalAlpha = 1.0;
     }
 
-    // 4. Capture snapshot from CLEAN offscreen canvas and send to Gradio
+    requestAnimationFrame(displayLoop);
+  }
+
+  // ── INFERENCE LOOP (fires every 3s — uploads frame to Gradio) ──
+  async function inferenceLoop() {
+    if (!state.webcamRunning) return;
+
     if (!isProcessingFrame) {
       isProcessingFrame = true;
       try {
-        const blob = await new Promise(resolve => offscreenCanvas.toBlob(resolve, 'image/jpeg', 0.7));
-        if (blob && state.webcamRunning) {
+        // Capture clean frame from offscreen canvas
+        offscreenCtx.drawImage(videoElem, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+        const blob = await new Promise(resolve =>
+          offscreenCanvas.toBlob(resolve, 'image/jpeg', 0.8)
+        );
+
+        if (blob && blob.size > 1000 && state.webcamRunning) {
+          addLiveLog("📤 Sending frame to AegisVision backend...", "info");
+
           const filePath = await uploadToGradio(blob, "frame.jpg");
           const { imageUrl, reportText } = await runGradioPredict(filePath);
           const summary = parseComplianceReport(reportText);
 
-          // Show annotated frame from Gradio in the overlay img
+          // Update annotated overlay image (drawn on canvas by displayLoop)
           const annotatedOverlay = document.getElementById("webcam-annotated-overlay");
           if (annotatedOverlay && imageUrl) {
             annotatedOverlay.src = imageUrl;
             annotatedOverlay.style.display = "block";
           }
 
-          const fakeData = { summary, faces: [], hand_boxes: [], hand_landmarks: [] };
-          state.latestFrameDetections = fakeData;
-          updateStatsAndLogs(fakeData);
+          updateStatsAndLogs({ summary, faces: [], hand_boxes: [], hand_landmarks: [] });
+          addLiveLog(`✅ Frame analysed — ${summary.total_faces} face(s) | ${summary.compliance_rate}% compliant`, "mask");
         }
       } catch (e) {
         console.error("Frame inference error:", e);
-        addLiveLog(`⚠ ${e.message}`, "no-mask");
+        addLiveLog(`⚠ Inference error: ${e.message}`, "no-mask");
       } finally {
         isProcessingFrame = false;
       }
     }
 
+    // Schedule next inference if still running
     if (state.webcamRunning) {
-      requestAnimationFrame(processWebcamLoop);
+      inferenceTimer = setTimeout(inferenceLoop, INFERENCE_INTERVAL_MS);
     }
   }
 
