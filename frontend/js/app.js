@@ -348,11 +348,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
           // Load annotated frame into an Image object — drawn by displayLoop
           if (imageUrl) {
+            addLiveLog(`🖼 Loading annotated frame...`, "info");
             const img = new Image();
-            img.crossOrigin = "anonymous";
-            img.onload = () => { state.latestAnnotatedImg = img; };
-            img.onerror = () => console.warn("Could not load annotated frame:", imageUrl);
+            // Note: NO crossOrigin here — HF /file= endpoint has no CORS headers.
+            // drawImage() works without CORS (canvas only taints on getImageData).
+            img.onload = () => {
+              state.latestAnnotatedImg = img;
+              addLiveLog(`🎯 Overlay ready (${img.naturalWidth}×${img.naturalHeight})`, "info");
+            };
+            img.onerror = (e) => {
+              console.warn("Annotated frame load failed:", imageUrl, e);
+              addLiveLog(`⚠ Frame overlay failed to load`, "no-mask");
+            };
             img.src = imageUrl;
+          } else {
+            addLiveLog(`⚠ No imageUrl in response`, "no-mask");
           }
 
           updateStatsAndLogs({ summary, faces: [], hand_boxes: [], hand_landmarks: [] });
