@@ -25,7 +25,8 @@ document.addEventListener("DOMContentLoaded", () => {
     logs: [],
     lastAlertTime: 0,
     lastFrameTime: performance.now(),
-    latestFrameDetections: null
+    latestFrameDetections: null,
+    latestAnnotatedImg: null   // Image object from Gradio — drawn on canvas by displayLoop
   };
 
   // ----------------------------------------------------------------
@@ -290,6 +291,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     clearTimeout(inferenceTimer);
     inferenceTimer = null;
+    state.latestAnnotatedImg = null;
     ctx.clearRect(0, 0, canvasElem.width, canvasElem.height);
     btnStartWebcam.style.display = "inline-flex";
     btnStopWebcam.style.display = "none";
@@ -314,11 +316,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // Draw live video to visible canvas
     ctx.drawImage(videoElem, 0, 0, canvasElem.width, canvasElem.height);
 
-    // Draw latest annotated overlay from Gradio (if available)
-    const annotatedOverlay = document.getElementById("webcam-annotated-overlay");
-    if (annotatedOverlay && annotatedOverlay.src && annotatedOverlay.complete) {
-      ctx.globalAlpha = 0.85;
-      ctx.drawImage(annotatedOverlay, 0, 0, canvasElem.width, canvasElem.height);
+    // Draw latest annotated overlay from Gradio (if available and loaded)
+    if (state.latestAnnotatedImg && state.latestAnnotatedImg.complete && state.latestAnnotatedImg.naturalWidth > 0) {
+      ctx.globalAlpha = 0.9;
+      ctx.drawImage(state.latestAnnotatedImg, 0, 0, canvasElem.width, canvasElem.height);
       ctx.globalAlpha = 1.0;
     }
 
@@ -345,11 +346,13 @@ document.addEventListener("DOMContentLoaded", () => {
           const { imageUrl, reportText } = await runGradioPredict(filePath);
           const summary = parseComplianceReport(reportText);
 
-          // Update annotated overlay image (drawn on canvas by displayLoop)
-          const annotatedOverlay = document.getElementById("webcam-annotated-overlay");
-          if (annotatedOverlay && imageUrl) {
-            annotatedOverlay.src = imageUrl;
-            annotatedOverlay.style.display = "block";
+          // Load annotated frame into an Image object — drawn by displayLoop
+          if (imageUrl) {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.onload = () => { state.latestAnnotatedImg = img; };
+            img.onerror = () => console.warn("Could not load annotated frame:", imageUrl);
+            img.src = imageUrl;
           }
 
           updateStatsAndLogs({ summary, faces: [], hand_boxes: [], hand_landmarks: [] });
